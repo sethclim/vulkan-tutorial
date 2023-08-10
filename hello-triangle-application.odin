@@ -15,6 +15,8 @@ Context :: struct
     instance : vk.Instance,
 }
 
+call_back : vk.ProcDebugUtilsMessengerCallbackEXT
+
 VALIDATION_LAYERS := [?]cstring{"VK_LAYER_KHRONOS_validation"};
 
 DEVICE_EXTENSIONS := [?]cstring{
@@ -73,6 +75,18 @@ cleanup :: proc(using ctx: ^Context)
 
 createInstance :: proc(using ctx: ^Context)
 {
+    enableValidationLayers := false
+    when ODIN_DEBUG
+    {
+        if !checkValidationLayerSupport()
+        {
+            fmt.eprintf("ERROR: validation layer %q not available\n", name);
+			os.exit(1);
+        }
+
+        enableValidationLayers = true
+    }
+
     appInfo : vk.ApplicationInfo;
     appInfo.sType = .APPLICATION_INFO;
     appInfo.pNext = nil;
@@ -86,25 +100,22 @@ createInstance :: proc(using ctx: ^Context)
     createInfo.sType = .INSTANCE_CREATE_INFO;
     createInfo.pNext = nil;
     createInfo.pApplicationInfo = &appInfo;
-    createInfo.enabledLayerCount = 0;
-    createInfo.ppEnabledLayerNames = &VALIDATION_LAYERS[0];
 
-    glfwExtensions := glfw.GetRequiredInstanceExtensions();
-
-    glfwExtensionsCount := len(glfwExtensions)
-
-    requiredExtensionsCount := glfwExtensionsCount + 1
-    requiredExtensions := make([]cstring, requiredExtensionsCount); 
-
-    for i := 0; i < glfwExtensionsCount; i += 1
+    if(enableValidationLayers)
     {
-        requiredExtensions[i] = glfwExtensions[i]
+        createInfo.ppEnabledLayerNames = &VALIDATION_LAYERS[0];
+		createInfo.enabledLayerCount = len(VALIDATION_LAYERS);
     }
-    requiredExtensions[requiredExtensionsCount - 1] = vk.KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
+    else
+    {
+        createInfo.enabledLayerCount = 0;
+    }
+
+    extensions := getRequiredExtensions(enableValidationLayers)
 
     // createInfo.flags = distinct bit_set [vk.InstanceCreateFlag.ENUMERATE_PORTABILITY_KHR]
-    createInfo.enabledExtensionCount = cast(u32)len(requiredExtensions);
-    createInfo.ppEnabledExtensionNames = raw_data(requiredExtensions);
+    createInfo.enabledExtensionCount = cast(u32)len(extensions);
+    createInfo.ppEnabledExtensionNames = raw_data(extensions);
     
 	if vk.CreateInstance(&createInfo, nil, &instance) != .SUCCESS
 	{
@@ -125,6 +136,7 @@ get_suitable_device :: proc(using ctx: ^Context)
 		fmt.eprintf("ERROR: Failed to find GPUs with Vulkan support\n");
 		os.exit(1);
 	}
+
 	devices := make([]vk.PhysicalDevice, device_count);
 	vk.EnumeratePhysicalDevices(instance, &device_count, raw_data(devices));
 
@@ -159,4 +171,44 @@ check_device_extension_support :: proc(physical_device: vk.PhysicalDevice) -> bo
 		if !found do return false;
 	}
 	return true;
+}
+
+checkValidationLayerSupport :: proc() -> bool
+{
+    layer_count: u32;
+    vk.EnumerateInstanceLayerProperties(&layer_count, nil);
+    layers := make([]vk.LayerProperties, layer_count);
+    vk.EnumerateInstanceLayerProperties(&layer_count, raw_data(layers));
+    
+    outer: for name in VALIDATION_LAYERS
+    {
+        for layer in &layers
+        {
+            if name == cstring(&layer.layerName[0]) do continue outer;
+        }
+
+        return false
+    }
+
+    return true;
+}
+
+getRequiredExtensions :: proc(enableValidationLayers : bool) -> [dynamic]cstring
+{
+    glfwExtensions := glfw.GetRequiredInstanceExtensions();
+
+    extensions : [dynamic]cstring
+    for i := 0; i <  len(glfwExtensions); i += 1
+    {
+        append(&extensions, glfwExtensions[i])
+    }
+
+    append(&extensions, vk.KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)
+
+    if (enableValidationLayers) 
+    {
+        append(&extensions, vk.EXT_DEBUG_UTILS_EXTENSION_NAME)
+    }
+
+    return extensions;
 }
