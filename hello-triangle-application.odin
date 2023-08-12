@@ -13,15 +13,15 @@ Context :: struct
 {
     window: glfw.WindowHandle,
     instance : vk.Instance,
+    debugMessenger : vk.DebugUtilsMessengerEXT,
+    enableValidationLayers : bool,
 }
 
 call_back : vk.ProcDebugUtilsMessengerCallbackEXT
 
 VALIDATION_LAYERS := [?]cstring{"VK_LAYER_KHRONOS_validation"};
 
-DEVICE_EXTENSIONS := [?]cstring{
-	"VK_KHR_swapchain",
-};
+DEVICE_EXTENSIONS := [?]cstring{"VK_KHR_swapchain"};
 
 run :: proc()
 {
@@ -52,8 +52,16 @@ initVulkan :: proc(using ctx: ^Context)
 	{
 		(cast(^rawptr)p)^ = glfw.GetInstanceProcAddress((^vk.Instance)(context.user_ptr)^, name);
 	}
+
+    when ODIN_DEBUG
+    {
+        enableValidationLayers = true;
+    }
+
+
     vk.load_proc_addresses(get_proc_address);
     createInstance(ctx);
+    setupDebugMessenger(ctx);
     get_suitable_device(ctx);
     vk.load_proc_addresses(get_proc_address);
 }
@@ -68,6 +76,10 @@ mainLoop :: proc(using ctx: ^Context)
 
 cleanup :: proc(using ctx: ^Context) 
 {
+    if (enableValidationLayers) {
+        DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nil);
+    }
+
     vk.DestroyInstance(instance, nil);
     glfw.DestroyWindow(window);
     glfw.Terminate();
@@ -75,7 +87,7 @@ cleanup :: proc(using ctx: ^Context)
 
 createInstance :: proc(using ctx: ^Context)
 {
-    enableValidationLayers := false
+
     when ODIN_DEBUG
     {
         if !checkValidationLayerSupport()
@@ -83,8 +95,6 @@ createInstance :: proc(using ctx: ^Context)
             fmt.eprintf("ERROR: validation layer %q not available\n", name);
 			os.exit(1);
         }
-
-        enableValidationLayers = true
     }
 
     appInfo : vk.ApplicationInfo;
@@ -211,4 +221,53 @@ getRequiredExtensions :: proc(enableValidationLayers : bool) -> [dynamic]cstring
     }
 
     return extensions;
+}
+
+debugCallback :: proc(
+    messageSeverity : vk.DebugUtilsMessageSeverityFlagEXT, 
+    messageType : vk.DebugUtilsMessageTypeFlagsEXT,
+    pCallbackData : vk.DebugUtilsMessengerCallbackDataEXT,
+    pUserData : rawptr) -> b32 
+{
+    fmt.eprintf("validation layer:  %q \n", pCallbackData.pMessage);
+    // was vk.False
+    return false;
+}
+
+
+setupDebugMessenger :: proc(using ctx: ^Context) 
+{
+    if (!enableValidationLayers) { return };
+
+    createInfo : vk.DebugUtilsMessengerCreateInfoEXT;
+    createInfo.sType = vk.StructureType.DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    createInfo.messageSeverity =  {vk.DebugUtilsMessageSeverityFlagEXT.VERBOSE,  vk.DebugUtilsMessageSeverityFlagEXT.WARNING, vk.DebugUtilsMessageSeverityFlagEXT.ERROR };
+    createInfo.messageType = {vk.DebugUtilsMessageTypeFlagEXT.GENERAL, vk.DebugUtilsMessageTypeFlagEXT.GENERAL, vk.DebugUtilsMessageTypeFlagEXT.PERFORMANCE}
+    createInfo.pfnUserCallback = vk.ProcDebugUtilsMessengerCallbackEXT(debugCallback);
+    createInfo.pUserData = nil; // Optional
+
+    if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nil, &ctx.debugMessenger) != vk.Result.SUCCESS) {
+        fmt.eprintf("Failed to set up debug messenger!\n");
+        os.exit(1);
+    }
+
+}
+
+CreateDebugUtilsMessengerEXT :: proc(instance : vk.Instance, pCreateInfo : ^vk.DebugUtilsMessengerCreateInfoEXT, pAllocator : ^vk.AllocationCallbacks, pDebugMessenger : ^vk.DebugUtilsMessengerEXT) -> vk.Result 
+{
+    //(PFN_vkCreateDebugUtilsMessengerEXT) was cast to this
+    func :=  vk.ProcCreateDebugUtilsMessengerEXT(vk.GetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+    if (func != nil) {
+        return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
+    } else {
+        return vk.Result.ERROR_EXTENSION_NOT_PRESENT;
+    }
+}
+
+DestroyDebugUtilsMessengerEXT :: proc(instance : vk.Instance,  debugMessenger : vk.DebugUtilsMessengerEXT, pAllocator : ^vk.AllocationCallbacks) 
+{
+    func := vk.ProcDestroyDebugUtilsMessengerEXT(vk.GetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
+    if (func != nil) {
+        func(instance, debugMessenger, pAllocator);
+    }
 }
