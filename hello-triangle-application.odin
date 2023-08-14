@@ -13,6 +13,9 @@ Context :: struct
 {
     window: glfw.WindowHandle,
     instance : vk.Instance,
+    device : vk.Device,
+    physicalDevice : vk.PhysicalDevice,
+    graphicsQueue : vk.Queue,
     debugMessenger : vk.DebugUtilsMessengerEXT,
     enableValidationLayers : bool,
 }
@@ -60,8 +63,77 @@ initVulkan :: proc(using ctx: ^Context)
     createInstance(ctx);
     get_suitable_device(ctx);
     setupDebugMessenger(ctx);
-    vk.load_proc_addresses(get_proc_address);
+    vk.load_proc_addresses(get_proc_address);\
+    pickPhysicalDevice(ctx);
+    createLogicalDevice(ctx);
+
 }
+
+pickPhysicalDevice :: proc(using ctx: ^Context)
+{
+    deviceCount : u32 = 0;
+    vk.EnumeratePhysicalDevices(instance, &deviceCount, nil);
+
+    if (deviceCount == 0) {
+        fmt.eprintf("failed to find GPUs with Vulkan support!");
+        os.exit(1);
+    }
+
+    devices := make([]vk.PhysicalDevice, deviceCount);
+    vk.EnumeratePhysicalDevices(instance, &deviceCount, raw_data(devices));
+
+    for device in devices 
+    {
+        if (isDeviceSuitable(device)) {
+            physicalDevice = device;
+            break;
+        }
+    }
+    
+    if (physicalDevice == nil) {
+        fmt.eprintf("failed to find a suitable GPU!");
+        os.exit(1);
+    }
+}
+
+createLogicalDevice :: proc(using ctx: ^Context) {
+    indices := findQueueFamilies(physicalDevice);
+
+    queueCreateInfo : vk.DeviceQueueCreateInfo;
+    queueCreateInfo.sType = vk.StructureType.DEVICE_QUEUE_CREATE_INFO;
+    queueCreateInfo.queueFamilyIndex = indices.graphicsFamily;
+    queueCreateInfo.queueCount = 1;
+
+    queuePriority : f32 = 1.0;
+    queueCreateInfo.pQueuePriorities = &queuePriority;
+
+    deviceFeatures : vk.PhysicalDeviceFeatures;
+
+    createInfo : vk.DeviceCreateInfo;
+    createInfo.sType = vk.StructureType.DEVICE_CREATE_INFO;
+
+    createInfo.pQueueCreateInfos = &queueCreateInfo;
+    createInfo.queueCreateInfoCount = 1;
+    createInfo.pEnabledFeatures = &deviceFeatures;
+
+    createInfo.enabledExtensionCount = 0;
+
+    if (enableValidationLayers) {
+        createInfo.enabledLayerCount = len(VALIDATION_LAYERS);
+        createInfo.ppEnabledLayerNames = raw_data(&VALIDATION_LAYERS);
+    } else {
+        createInfo.enabledLayerCount = 0;
+    }
+
+    if vk.CreateDevice(physicalDevice, &createInfo, nil, &device) !=  .SUCCESS
+    {
+        fmt.eprintf("ERROR: failed to create logical device!\n");
+		os.exit(1);
+    }
+
+    vk.GetDeviceQueue(device, indices.graphicsFamily, 0, &graphicsQueue);
+}
+
 
 mainLoop :: proc(using ctx: ^Context) 
 {
@@ -76,7 +148,7 @@ cleanup :: proc(using ctx: ^Context)
     if (enableValidationLayers) {
         DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nil);
     }
-
+    vk.DestroyDevice(device, nil);
     vk.DestroyInstance(instance, nil);
     glfw.DestroyWindow(window);
     glfw.Terminate();
@@ -273,4 +345,46 @@ DestroyDebugUtilsMessengerEXT :: proc(instance : vk.Instance,  debugMessenger : 
     if (func != nil) {
         func(instance, debugMessenger, pAllocator);
     }
+}
+
+isDeviceSuitable :: proc(device : vk.PhysicalDevice) -> bool 
+{
+    // deviceProperties : vk.PhysicalDeviceProperties;
+    // vk.GetPhysicalDeviceProperties(device, &deviceProperties);
+
+    // deviceFeatures : vk.PhysicalDeviceFeatures;
+    // vk.GetPhysicalDeviceFeatures(device, &deviceFeatures);
+
+    indices := findQueueFamilies(device);
+
+    return indices.present
+}
+
+QueueFamilyIndices :: struct {
+    graphicsFamily : u32,
+    present : bool,
+};
+
+findQueueFamilies :: proc(device : vk.PhysicalDevice) -> QueueFamilyIndices 
+{
+    indices : QueueFamilyIndices;
+
+    queue_count: u32;
+	vk.GetPhysicalDeviceQueueFamilyProperties(device, &queue_count, nil);
+	queueFamilies := make([]vk.QueueFamilyProperties, queue_count);
+	vk.GetPhysicalDeviceQueueFamilyProperties(device, &queue_count, raw_data(queueFamilies));
+
+
+    for queueFamily, i in queueFamilies 
+    {
+        if vk.QueueFlag.GRAPHICS in queueFamily.queueFlags
+        {
+            indices.graphicsFamily = u32(i);
+            indices.present = true;
+            break
+        }
+    }
+
+    return indices;
+
 }
