@@ -13,11 +13,13 @@ Context :: struct
 {
     window: glfw.WindowHandle,
     instance : vk.Instance,
-    device : vk.Device,
+    device : vk.Device, 
     physicalDevice : vk.PhysicalDevice,
     graphicsQueue : vk.Queue,
+    presentQueue : vk.Queue,
     debugMessenger : vk.DebugUtilsMessengerEXT,
     enableValidationLayers : bool,
+    surface : vk.SurfaceKHR
 }
 
 call_back : vk.ProcDebugUtilsMessengerCallbackEXT
@@ -63,10 +65,20 @@ initVulkan :: proc(using ctx: ^Context)
     createInstance(ctx);
     get_suitable_device(ctx);
     setupDebugMessenger(ctx);
+    createSurface(ctx)
     vk.load_proc_addresses(get_proc_address);\
     pickPhysicalDevice(ctx);
     createLogicalDevice(ctx);
 
+}
+
+
+createSurface :: proc(using ctx: ^Context) {
+    if glfw.CreateWindowSurface(instance, window, nil, &surface) != .SUCCESS
+    {
+        fmt.eprintf("failed to find GPUs with Vulkan support!");
+        os.exit(1);
+    }
 }
 
 pickPhysicalDevice :: proc(using ctx: ^Context)
@@ -84,7 +96,7 @@ pickPhysicalDevice :: proc(using ctx: ^Context)
 
     for device in devices 
     {
-        if (isDeviceSuitable(device)) {
+        if (isDeviceSuitable(ctx)) {
             physicalDevice = device;
             break;
         }
@@ -97,23 +109,31 @@ pickPhysicalDevice :: proc(using ctx: ^Context)
 }
 
 createLogicalDevice :: proc(using ctx: ^Context) {
-    indices := findQueueFamilies(physicalDevice);
+    indices := findQueueFamilies(ctx);
 
-    queueCreateInfo : vk.DeviceQueueCreateInfo;
-    queueCreateInfo.sType = vk.StructureType.DEVICE_QUEUE_CREATE_INFO;
-    queueCreateInfo.queueFamilyIndex = indices.graphicsFamily;
-    queueCreateInfo.queueCount = 1;
+    uniqueQueueFamilies := [2]bool{indices.graphicsFamilySet, indices.presentFamilySet};
+    
+    queueCreateInfos := make([]vk.DeviceQueueCreateInfo, len(uniqueQueueFamilies))
 
     queuePriority : f32 = 1.0;
-    queueCreateInfo.pQueuePriorities = &queuePriority;
+    for queueFamily, i in uniqueQueueFamilies 
+    {
+        queueCreateInfo : vk.DeviceQueueCreateInfo;
+        queueCreateInfo.sType = vk.StructureType.DEVICE_QUEUE_CREATE_INFO;
+        queueCreateInfo.queueFamilyIndex = indices.graphicsFamily;
+        queueCreateInfo.queueCount = 1;
+        queueCreateInfo.pQueuePriorities = &queuePriority;
+
+        queueCreateInfos[i] = queueCreateInfo
+    }
 
     deviceFeatures : vk.PhysicalDeviceFeatures;
 
     createInfo : vk.DeviceCreateInfo;
     createInfo.sType = vk.StructureType.DEVICE_CREATE_INFO;
 
-    createInfo.pQueueCreateInfos = &queueCreateInfo;
-    createInfo.queueCreateInfoCount = 1;
+    createInfo.pQueueCreateInfos = raw_data(queueCreateInfos);
+    createInfo.queueCreateInfoCount = u32(len(queueCreateInfos));
     createInfo.pEnabledFeatures = &deviceFeatures;
 
     createInfo.enabledExtensionCount = 0;
@@ -132,6 +152,7 @@ createLogicalDevice :: proc(using ctx: ^Context) {
     }
 
     vk.GetDeviceQueue(device, indices.graphicsFamily, 0, &graphicsQueue);
+    vk.GetDeviceQueue(device, indices.presentFamily, 0, &presentQueue);
 }
 
 
@@ -149,6 +170,7 @@ cleanup :: proc(using ctx: ^Context)
         DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nil);
     }
     vk.DestroyDevice(device, nil);
+    vk.DestroySurfaceKHR(instance, surface, nil);
     vk.DestroyInstance(instance, nil);
     glfw.DestroyWindow(window);
     glfw.Terminate();
@@ -347,7 +369,7 @@ DestroyDebugUtilsMessengerEXT :: proc(instance : vk.Instance,  debugMessenger : 
     }
 }
 
-isDeviceSuitable :: proc(device : vk.PhysicalDevice) -> bool 
+isDeviceSuitable :: proc(using ctx: ^Context) -> bool 
 {
     // deviceProperties : vk.PhysicalDeviceProperties;
     // vk.GetPhysicalDeviceProperties(device, &deviceProperties);
@@ -355,24 +377,31 @@ isDeviceSuitable :: proc(device : vk.PhysicalDevice) -> bool
     // deviceFeatures : vk.PhysicalDeviceFeatures;
     // vk.GetPhysicalDeviceFeatures(device, &deviceFeatures);
 
-    indices := findQueueFamilies(device);
+    indices := findQueueFamilies(ctx);
 
-    return indices.present
+    return queueFamilyIndicesIsComplete(indices)
 }
 
 QueueFamilyIndices :: struct {
     graphicsFamily : u32,
-    present : bool,
+    graphicsFamilySet : bool,
+    presentFamily : u32,
+    presentFamilySet : bool,
 };
 
-findQueueFamilies :: proc(device : vk.PhysicalDevice) -> QueueFamilyIndices 
+queueFamilyIndicesIsComplete :: proc(using indicies : QueueFamilyIndices) -> bool 
+{
+    return graphicsFamilySet && presentFamilySet;
+}
+
+findQueueFamilies :: proc(using ctx: ^Context) -> QueueFamilyIndices 
 {
     indices : QueueFamilyIndices;
 
     queue_count: u32;
-	vk.GetPhysicalDeviceQueueFamilyProperties(device, &queue_count, nil);
+	vk.GetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queue_count, nil);
 	queueFamilies := make([]vk.QueueFamilyProperties, queue_count);
-	vk.GetPhysicalDeviceQueueFamilyProperties(device, &queue_count, raw_data(queueFamilies));
+	vk.GetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queue_count, raw_data(queueFamilies));
 
 
     for queueFamily, i in queueFamilies 
@@ -380,11 +409,19 @@ findQueueFamilies :: proc(device : vk.PhysicalDevice) -> QueueFamilyIndices
         if vk.QueueFlag.GRAPHICS in queueFamily.queueFlags
         {
             indices.graphicsFamily = u32(i);
-            indices.present = true;
+            indices.graphicsFamilySet = true;
             break
+        }
+
+        presentSupport : b32 = false;
+        vk.GetPhysicalDeviceSurfaceSupportKHR(physicalDevice, u32(i), surface, &presentSupport);
+
+        if (presentSupport) {
+            indices.presentFamily =  u32(i);
+            indices.presentFamilySet = true;
         }
     }
 
     return indices;
-
+ 
 }
