@@ -20,7 +20,6 @@ Context :: struct
 call_back : vk.ProcDebugUtilsMessengerCallbackEXT
 
 VALIDATION_LAYERS := [?]cstring{"VK_LAYER_KHRONOS_validation"};
-
 DEVICE_EXTENSIONS := [?]cstring{"VK_KHR_swapchain"};
 
 run :: proc()
@@ -28,7 +27,6 @@ run :: proc()
     using ctx: Context;
 
     initWindow(&ctx);
-
     initVulkan(&ctx);
     mainLoop(&ctx);
     cleanup(&ctx);
@@ -58,11 +56,10 @@ initVulkan :: proc(using ctx: ^Context)
         enableValidationLayers = true;
     }
 
-
     vk.load_proc_addresses(get_proc_address);
     createInstance(ctx);
-    setupDebugMessenger(ctx);
     get_suitable_device(ctx);
+    setupDebugMessenger(ctx);
     vk.load_proc_addresses(get_proc_address);
 }
 
@@ -87,14 +84,11 @@ cleanup :: proc(using ctx: ^Context)
 
 createInstance :: proc(using ctx: ^Context)
 {
-
-    when ODIN_DEBUG
+    if enableValidationLayers && !checkValidationLayerSupport()
     {
-        if !checkValidationLayerSupport()
-        {
-            fmt.eprintf("ERROR: validation layer %q not available\n", name);
-			os.exit(1);
-        }
+        //could add in printing layer name 
+        fmt.eprintf("ERROR: validation layer %q not available\n");
+        os.exit(1);
     }
 
     appInfo : vk.ApplicationInfo;
@@ -111,10 +105,13 @@ createInstance :: proc(using ctx: ^Context)
     createInfo.pNext = nil;
     createInfo.pApplicationInfo = &appInfo;
 
+    debugCreateInfo : vk.DebugUtilsMessengerCreateInfoEXT;
     if(enableValidationLayers)
     {
+        populateDebugMessengerCreateInfo(&debugCreateInfo);
         createInfo.ppEnabledLayerNames = &VALIDATION_LAYERS[0];
 		createInfo.enabledLayerCount = len(VALIDATION_LAYERS);
+        createInfo.pNext = &debugCreateInfo
     }
     else
     {
@@ -127,9 +124,12 @@ createInstance :: proc(using ctx: ^Context)
     createInfo.enabledExtensionCount = cast(u32)len(extensions);
     createInfo.ppEnabledExtensionNames = raw_data(extensions);
     
-	if vk.CreateInstance(&createInfo, nil, &instance) != .SUCCESS
+
+    res := vk.CreateInstance(&createInfo, nil, &instance)
+
+	if res  != .SUCCESS
 	{
-		fmt.eprintf("ERROR: Failed to create instance\n");
+		fmt.eprintf("ERROR: Failed to create instance", res);
 		return;
 	}
 	
@@ -213,7 +213,7 @@ getRequiredExtensions :: proc(enableValidationLayers : bool) -> [dynamic]cstring
         append(&extensions, glfwExtensions[i])
     }
 
-    append(&extensions, vk.KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)
+    // append(&extensions, vk.KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)
 
     if (enableValidationLayers) 
     {
@@ -229,28 +229,31 @@ debugCallback :: proc(
     pCallbackData : vk.DebugUtilsMessengerCallbackDataEXT,
     pUserData : rawptr) -> b32 
 {
-    fmt.eprintf("validation layer:  %q \n", pCallbackData.pMessage);
+    fmt.eprintf("validation layer:  %q ", pCallbackData.pMessage);
     // was vk.False
     return false;
 }
 
-
-setupDebugMessenger :: proc(using ctx: ^Context) 
+populateDebugMessengerCreateInfo :: proc (createInfo : ^vk.DebugUtilsMessengerCreateInfoEXT)
 {
-    if (!enableValidationLayers) { return };
-
-    createInfo : vk.DebugUtilsMessengerCreateInfoEXT;
     createInfo.sType = vk.StructureType.DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
     createInfo.messageSeverity =  {vk.DebugUtilsMessageSeverityFlagEXT.VERBOSE,  vk.DebugUtilsMessageSeverityFlagEXT.WARNING, vk.DebugUtilsMessageSeverityFlagEXT.ERROR };
     createInfo.messageType = {vk.DebugUtilsMessageTypeFlagEXT.GENERAL, vk.DebugUtilsMessageTypeFlagEXT.GENERAL, vk.DebugUtilsMessageTypeFlagEXT.PERFORMANCE}
     createInfo.pfnUserCallback = vk.ProcDebugUtilsMessengerCallbackEXT(debugCallback);
     createInfo.pUserData = nil; // Optional
+}
 
-    if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nil, &ctx.debugMessenger) != vk.Result.SUCCESS) {
+setupDebugMessenger :: proc(using ctx: ^Context)
+{
+    if (!enableValidationLayers) { return };
+
+    debugCreateInfo : vk.DebugUtilsMessengerCreateInfoEXT;
+    populateDebugMessengerCreateInfo(&debugCreateInfo);
+
+    if (CreateDebugUtilsMessengerEXT(instance, &debugCreateInfo, nil, &ctx.debugMessenger) != vk.Result.SUCCESS) {
         fmt.eprintf("Failed to set up debug messenger!\n");
         os.exit(1);
     }
-
 }
 
 CreateDebugUtilsMessengerEXT :: proc(instance : vk.Instance, pCreateInfo : ^vk.DebugUtilsMessengerCreateInfoEXT, pAllocator : ^vk.AllocationCallbacks, pDebugMessenger : ^vk.DebugUtilsMessengerEXT) -> vk.Result 
