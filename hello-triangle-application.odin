@@ -63,10 +63,10 @@ initVulkan :: proc(using ctx: ^Context)
 
     vk.load_proc_addresses(get_proc_address);
     createInstance(ctx);
-    get_suitable_device(ctx);
+    // get_suitable_device(ctx);
     setupDebugMessenger(ctx);
     createSurface(ctx)
-    vk.load_proc_addresses(get_proc_address);\
+    vk.load_proc_addresses(get_proc_address);
     pickPhysicalDevice(ctx);
     createLogicalDevice(ctx);
 
@@ -96,7 +96,7 @@ pickPhysicalDevice :: proc(using ctx: ^Context)
 
     for device in devices 
     {
-        if (isDeviceSuitable(ctx)) {
+        if (isDeviceSuitable(ctx, device)) {
             physicalDevice = device;
             break;
         }
@@ -108,11 +108,21 @@ pickPhysicalDevice :: proc(using ctx: ^Context)
     }
 }
 
-createLogicalDevice :: proc(using ctx: ^Context) {
-    indices := findQueueFamilies(ctx);
+createLogicalDevice :: proc(ctx: ^Context) {
+    indices := findQueueFamilies(ctx, ctx.physicalDevice);
 
-    uniqueQueueFamilies := [2]bool{indices.graphicsFamilySet, indices.presentFamilySet};
-    
+    uniqueQueueFamilies : [dynamic]u32;
+
+    if(indices.graphicsFamilySet)
+    {
+        append(&uniqueQueueFamilies, indices.graphicsFamily);
+    }
+
+    if(indices.presentFamilySet && indices.presentFamily != uniqueQueueFamilies[0])
+    {
+        append(&uniqueQueueFamilies, indices.presentFamily);
+    }
+
     queueCreateInfos := make([]vk.DeviceQueueCreateInfo, len(uniqueQueueFamilies))
 
     queuePriority : f32 = 1.0;
@@ -120,7 +130,7 @@ createLogicalDevice :: proc(using ctx: ^Context) {
     {
         queueCreateInfo : vk.DeviceQueueCreateInfo;
         queueCreateInfo.sType = vk.StructureType.DEVICE_QUEUE_CREATE_INFO;
-        queueCreateInfo.queueFamilyIndex = indices.graphicsFamily;
+        queueCreateInfo.queueFamilyIndex = queueFamily;
         queueCreateInfo.queueCount = 1;
         queueCreateInfo.pQueuePriorities = &queuePriority;
 
@@ -129,30 +139,31 @@ createLogicalDevice :: proc(using ctx: ^Context) {
 
     deviceFeatures : vk.PhysicalDeviceFeatures;
 
-    createInfo : vk.DeviceCreateInfo;
-    createInfo.sType = vk.StructureType.DEVICE_CREATE_INFO;
+	device_create_info: vk.DeviceCreateInfo;
+	device_create_info.sType = .DEVICE_CREATE_INFO;
+	device_create_info.enabledExtensionCount = u32(len(DEVICE_EXTENSIONS));
+	device_create_info.ppEnabledExtensionNames = &DEVICE_EXTENSIONS[0];
+	device_create_info.pQueueCreateInfos = raw_data(queueCreateInfos);
+	device_create_info.queueCreateInfoCount = u32(len(queueCreateInfos));
+	device_create_info.pEnabledFeatures = &deviceFeatures;
 
-    createInfo.pQueueCreateInfos = raw_data(queueCreateInfos);
-    createInfo.queueCreateInfoCount = u32(len(queueCreateInfos));
-    createInfo.pEnabledFeatures = &deviceFeatures;
-
-    createInfo.enabledExtensionCount = 0;
-
-    if (enableValidationLayers) {
-        createInfo.enabledLayerCount = len(VALIDATION_LAYERS);
-        createInfo.ppEnabledLayerNames = raw_data(&VALIDATION_LAYERS);
+    if (ctx.enableValidationLayers) {
+        device_create_info.enabledLayerCount = len(VALIDATION_LAYERS);
+        device_create_info.ppEnabledLayerNames = raw_data(&VALIDATION_LAYERS);
     } else {
-        createInfo.enabledLayerCount = 0;
+        device_create_info.enabledLayerCount = 0;
     }
 
-    if vk.CreateDevice(physicalDevice, &createInfo, nil, &device) !=  .SUCCESS
+    res := vk.CreateDevice(ctx.physicalDevice, &device_create_info, nil, &ctx.device)
+    
+    if res !=  .SUCCESS
     {
-        fmt.eprintf("ERROR: failed to create logical device!\n");
+        fmt.eprintf("ERROR: failed to create logical device!\n", res);
 		os.exit(1);
     }
 
-    vk.GetDeviceQueue(device, indices.graphicsFamily, 0, &graphicsQueue);
-    vk.GetDeviceQueue(device, indices.presentFamily, 0, &presentQueue);
+    vk.GetDeviceQueue(ctx.device, indices.graphicsFamily, 0, &ctx.graphicsQueue);
+    vk.GetDeviceQueue(ctx.device, indices.presentFamily, 0, &ctx.presentQueue);
 }
 
 
@@ -244,38 +255,15 @@ get_suitable_device :: proc(using ctx: ^Context)
 	devices := make([]vk.PhysicalDevice, device_count);
 	vk.EnumeratePhysicalDevices(instance, &device_count, raw_data(devices));
 
-    for dev in devices
-    {
-        if !check_device_extension_support(dev)
-        {
-            fmt.eprintf("ERROR: Device Doesn't Support Extentions\n");
-        }
-    }
+    // for dev in devices
+    // {
+    //     if !check_device_extension_support(dev)
+    //     {
+    //         fmt.eprintf("ERROR: Device Doesn't Support Extentions\n");
+    //     }
+    // }
 }
 
-check_device_extension_support :: proc(physical_device: vk.PhysicalDevice) -> bool
-{
-	ext_count: u32;
-	vk.EnumerateDeviceExtensionProperties(physical_device, nil, &ext_count, nil);
-	
-	available_extensions := make([]vk.ExtensionProperties, ext_count);
-	vk.EnumerateDeviceExtensionProperties(physical_device, nil, &ext_count, raw_data(available_extensions));
-	
-	for ext in DEVICE_EXTENSIONS
-	{
-		found: b32;
-		for available in &available_extensions
-		{
-			if cstring(&available.extensionName[0]) == ext
-			{
-				found = true;
-				break;
-			}
-		}
-		if !found do return false;
-	}
-	return true;
-}
 
 checkValidationLayerSupport :: proc() -> bool
 {
@@ -290,30 +278,30 @@ checkValidationLayerSupport :: proc() -> bool
         {
             if name == cstring(&layer.layerName[0]) do continue outer;
         }
-
+        
         return false
     }
-
+    
     return true;
 }
 
 getRequiredExtensions :: proc(enableValidationLayers : bool) -> [dynamic]cstring
 {
     glfwExtensions := glfw.GetRequiredInstanceExtensions();
-
+    
     extensions : [dynamic]cstring
     for i := 0; i <  len(glfwExtensions); i += 1
     {
         append(&extensions, glfwExtensions[i])
     }
-
+    
     // append(&extensions, vk.KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)
-
+    
     if (enableValidationLayers) 
     {
         append(&extensions, vk.EXT_DEBUG_UTILS_EXTENSION_NAME)
     }
-
+    
     return extensions;
 }
 
@@ -322,43 +310,43 @@ debugCallback :: proc(
     messageType : vk.DebugUtilsMessageTypeFlagsEXT,
     pCallbackData : vk.DebugUtilsMessengerCallbackDataEXT,
     pUserData : rawptr) -> b32 
-{
-    fmt.eprintf("validation layer:  %q ", pCallbackData.pMessage);
-    // was vk.False
-    return false;
-}
-
-populateDebugMessengerCreateInfo :: proc (createInfo : ^vk.DebugUtilsMessengerCreateInfoEXT)
-{
-    createInfo.sType = vk.StructureType.DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-    createInfo.messageSeverity =  {vk.DebugUtilsMessageSeverityFlagEXT.VERBOSE,  vk.DebugUtilsMessageSeverityFlagEXT.WARNING, vk.DebugUtilsMessageSeverityFlagEXT.ERROR };
-    createInfo.messageType = {vk.DebugUtilsMessageTypeFlagEXT.GENERAL, vk.DebugUtilsMessageTypeFlagEXT.GENERAL, vk.DebugUtilsMessageTypeFlagEXT.PERFORMANCE}
-    createInfo.pfnUserCallback = vk.ProcDebugUtilsMessengerCallbackEXT(debugCallback);
-    createInfo.pUserData = nil; // Optional
-}
-
-setupDebugMessenger :: proc(using ctx: ^Context)
-{
-    if (!enableValidationLayers) { return };
-
-    debugCreateInfo : vk.DebugUtilsMessengerCreateInfoEXT;
-    populateDebugMessengerCreateInfo(&debugCreateInfo);
-
-    if (CreateDebugUtilsMessengerEXT(instance, &debugCreateInfo, nil, &ctx.debugMessenger) != vk.Result.SUCCESS) {
-        fmt.eprintf("Failed to set up debug messenger!\n");
-        os.exit(1);
+    {
+        fmt.eprintf("validation layer:  %q ", pCallbackData.pMessage);
+        // was vk.False
+        return false;
     }
-}
-
-CreateDebugUtilsMessengerEXT :: proc(instance : vk.Instance, pCreateInfo : ^vk.DebugUtilsMessengerCreateInfoEXT, pAllocator : ^vk.AllocationCallbacks, pDebugMessenger : ^vk.DebugUtilsMessengerEXT) -> vk.Result 
-{
-    //(PFN_vkCreateDebugUtilsMessengerEXT) was cast to this
-    func :=  vk.ProcCreateDebugUtilsMessengerEXT(vk.GetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
-    if (func != nil) {
-        return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
-    } else {
-        return vk.Result.ERROR_EXTENSION_NOT_PRESENT;
+    
+    populateDebugMessengerCreateInfo :: proc (createInfo : ^vk.DebugUtilsMessengerCreateInfoEXT)
+    {
+        createInfo.sType = vk.StructureType.DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        createInfo.messageSeverity =  {vk.DebugUtilsMessageSeverityFlagEXT.VERBOSE,  vk.DebugUtilsMessageSeverityFlagEXT.WARNING, vk.DebugUtilsMessageSeverityFlagEXT.ERROR };
+        createInfo.messageType = {vk.DebugUtilsMessageTypeFlagEXT.GENERAL, vk.DebugUtilsMessageTypeFlagEXT.GENERAL, vk.DebugUtilsMessageTypeFlagEXT.PERFORMANCE}
+        createInfo.pfnUserCallback = vk.ProcDebugUtilsMessengerCallbackEXT(debugCallback);
+        createInfo.pUserData = nil; // Optional
     }
+    
+    setupDebugMessenger :: proc(using ctx: ^Context)
+    {
+        if (!enableValidationLayers) { return };
+        
+        debugCreateInfo : vk.DebugUtilsMessengerCreateInfoEXT;
+        populateDebugMessengerCreateInfo(&debugCreateInfo);
+        
+        if (CreateDebugUtilsMessengerEXT(instance, &debugCreateInfo, nil, &ctx.debugMessenger) != vk.Result.SUCCESS) {
+            fmt.eprintf("Failed to set up debug messenger!\n");
+            os.exit(1);
+        }
+    }
+    
+    CreateDebugUtilsMessengerEXT :: proc(instance : vk.Instance, pCreateInfo : ^vk.DebugUtilsMessengerCreateInfoEXT, pAllocator : ^vk.AllocationCallbacks, pDebugMessenger : ^vk.DebugUtilsMessengerEXT) -> vk.Result 
+    {
+        //(PFN_vkCreateDebugUtilsMessengerEXT) was cast to this
+        func :=  vk.ProcCreateDebugUtilsMessengerEXT(vk.GetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+        if (func != nil) {
+            return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
+        } else {
+            return vk.Result.ERROR_EXTENSION_NOT_PRESENT;
+        }
 }
 
 DestroyDebugUtilsMessengerEXT :: proc(instance : vk.Instance,  debugMessenger : vk.DebugUtilsMessengerEXT, pAllocator : ^vk.AllocationCallbacks) 
@@ -369,18 +357,45 @@ DestroyDebugUtilsMessengerEXT :: proc(instance : vk.Instance,  debugMessenger : 
     }
 }
 
-isDeviceSuitable :: proc(using ctx: ^Context) -> bool 
+isDeviceSuitable :: proc(ctx: ^Context, physicalDevice : vk.PhysicalDevice) -> bool 
 {
     // deviceProperties : vk.PhysicalDeviceProperties;
     // vk.GetPhysicalDeviceProperties(device, &deviceProperties);
-
+    
     // deviceFeatures : vk.PhysicalDeviceFeatures;
     // vk.GetPhysicalDeviceFeatures(device, &deviceFeatures);
-
-    indices := findQueueFamilies(ctx);
-
-    return queueFamilyIndicesIsComplete(indices)
+    
+    indices := findQueueFamilies(ctx, physicalDevice);
+    
+    extensionsSupported := checkDeviceExtensionSupport(physicalDevice);
+    
+    return queueFamilyIndicesIsComplete(indices) && extensionsSupported
 }
+
+checkDeviceExtensionSupport :: proc(physical_device: vk.PhysicalDevice) -> bool
+{
+    extensionCount: u32;
+    vk.EnumerateDeviceExtensionProperties(physical_device, nil, &extensionCount, nil);
+    
+    available_extensions := make([]vk.ExtensionProperties, extensionCount);
+    vk.EnumerateDeviceExtensionProperties(physical_device, nil, &extensionCount, raw_data(available_extensions));
+    
+    for ext in DEVICE_EXTENSIONS
+    {
+        found: b32;
+        for available in &available_extensions
+        {
+            if cstring(&available.extensionName[0]) == ext
+            {
+                found = true;
+                break;
+            }
+        }
+        if !found do return false;
+    }
+    return true;
+}
+
 
 QueueFamilyIndices :: struct {
     graphicsFamily : u32,
@@ -389,12 +404,11 @@ QueueFamilyIndices :: struct {
     presentFamilySet : bool,
 };
 
-queueFamilyIndicesIsComplete :: proc(using indicies : QueueFamilyIndices) -> bool 
-{
-    return graphicsFamilySet && presentFamilySet;
+queueFamilyIndicesIsComplete :: proc(using indicies : QueueFamilyIndices) -> bool {
+    return (graphicsFamilySet && presentFamilySet);
 }
 
-findQueueFamilies :: proc(using ctx: ^Context) -> QueueFamilyIndices 
+findQueueFamilies :: proc(ctx: ^Context, physicalDevice : vk.PhysicalDevice) -> QueueFamilyIndices 
 {
     indices : QueueFamilyIndices;
 
@@ -410,15 +424,19 @@ findQueueFamilies :: proc(using ctx: ^Context) -> QueueFamilyIndices
         {
             indices.graphicsFamily = u32(i);
             indices.graphicsFamilySet = true;
-            break
         }
 
         presentSupport : b32 = false;
-        vk.GetPhysicalDeviceSurfaceSupportKHR(physicalDevice, u32(i), surface, &presentSupport);
+        vk.GetPhysicalDeviceSurfaceSupportKHR(physicalDevice, u32(i), ctx.surface, &presentSupport);
 
         if (presentSupport) {
             indices.presentFamily =  u32(i);
             indices.presentFamilySet = true;
+        }
+
+        if(queueFamilyIndicesIsComplete(indices))
+        {
+            break
         }
     }
 
