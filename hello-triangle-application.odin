@@ -15,12 +15,40 @@ Context :: struct
     instance : vk.Instance,
     device : vk.Device, 
     physicalDevice : vk.PhysicalDevice,
+    swap_chain: Swapchain,
     graphicsQueue : vk.Queue,
     presentQueue : vk.Queue,
     debugMessenger : vk.DebugUtilsMessengerEXT,
     enableValidationLayers : bool,
     surface : vk.SurfaceKHR
 }
+
+QueueFamilyIndices :: struct {
+    graphicsFamily : u32,
+    graphicsFamilySet : bool,
+    presentFamily : u32,
+    presentFamilySet : bool,
+};
+
+Swapchain :: struct
+{
+	handle: vk.SwapchainKHR,
+	images: []vk.Image,
+	image_views: []vk.ImageView,
+	format: vk.SurfaceFormatKHR,
+	extent: vk.Extent2D,
+	present_mode: vk.PresentModeKHR,
+	image_count: u32,
+	support: SwapChainSupportDetails,
+	framebuffers: []vk.Framebuffer,
+}
+
+
+SwapChainSupportDetails :: struct{
+    capabilities : vk.SurfaceCapabilitiesKHR,
+	formats: []vk.SurfaceFormatKHR,
+	present_modes: []vk.PresentModeKHR,
+};
 
 call_back : vk.ProcDebugUtilsMessengerCallbackEXT
 
@@ -69,7 +97,7 @@ initVulkan :: proc(using ctx: ^Context)
     vk.load_proc_addresses(get_proc_address);
     pickPhysicalDevice(ctx);
     createLogicalDevice(ctx);
-
+    create_swap_chain(ctx)
 }
 
 
@@ -177,6 +205,7 @@ mainLoop :: proc(using ctx: ^Context)
 
 cleanup :: proc(using ctx: ^Context) 
 {
+    vk.DestroySwapchainKHR(device, swap_chain.handle, nil);
     if (enableValidationLayers) {
         DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nil);
     }
@@ -338,8 +367,11 @@ debugCallback :: proc(
         }
     }
     
-    CreateDebugUtilsMessengerEXT :: proc(instance : vk.Instance, pCreateInfo : ^vk.DebugUtilsMessengerCreateInfoEXT, pAllocator : ^vk.AllocationCallbacks, pDebugMessenger : ^vk.DebugUtilsMessengerEXT) -> vk.Result 
-    {
+CreateDebugUtilsMessengerEXT :: proc(instance : vk.Instance, 
+                                     pCreateInfo : ^vk.DebugUtilsMessengerCreateInfoEXT, 
+                                     pAllocator : ^vk.AllocationCallbacks, 
+                                     pDebugMessenger : ^vk.DebugUtilsMessengerEXT) -> vk.Result 
+{
         //(PFN_vkCreateDebugUtilsMessengerEXT) was cast to this
         func :=  vk.ProcCreateDebugUtilsMessengerEXT(vk.GetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
         if (func != nil) {
@@ -368,8 +400,15 @@ isDeviceSuitable :: proc(ctx: ^Context, physicalDevice : vk.PhysicalDevice) -> b
     indices := findQueueFamilies(ctx, physicalDevice);
     
     extensionsSupported := checkDeviceExtensionSupport(physicalDevice);
-    
-    return queueFamilyIndicesIsComplete(indices) && extensionsSupported
+
+    swapChainAdequate := false;
+    if(extensionsSupported)
+    {
+        ctx.swap_chain.support = querySwapChainSupport(ctx, physicalDevice);
+        swapChainAdequate = !(len(ctx.swap_chain.support.formats) == 0 || len(ctx.swap_chain.support.present_modes) == 0)
+    }
+
+    return queueFamilyIndicesIsComplete(indices) && extensionsSupported && swapChainAdequate
 }
 
 checkDeviceExtensionSupport :: proc(physical_device: vk.PhysicalDevice) -> bool
@@ -397,12 +436,6 @@ checkDeviceExtensionSupport :: proc(physical_device: vk.PhysicalDevice) -> bool
 }
 
 
-QueueFamilyIndices :: struct {
-    graphicsFamily : u32,
-    graphicsFamilySet : bool,
-    presentFamily : u32,
-    presentFamilySet : bool,
-};
 
 queueFamilyIndicesIsComplete :: proc(using indicies : QueueFamilyIndices) -> bool {
     return (graphicsFamilySet && presentFamilySet);
@@ -442,4 +475,127 @@ findQueueFamilies :: proc(ctx: ^Context, physicalDevice : vk.PhysicalDevice) -> 
 
     return indices;
  
+}
+
+/////////////////// SWAP CHAIN //////////////////
+
+querySwapChainSupport :: proc (ctx : ^Context, physicalDevice : vk.PhysicalDevice) -> SwapChainSupportDetails 
+{
+    details : SwapChainSupportDetails;
+
+    vk.GetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, ctx.surface, &details.capabilities);
+
+    formatCount: u32;
+    vk.GetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, ctx.surface, &formatCount, nil);
+
+    if (formatCount > 0) {
+        details.formats = make([]vk.SurfaceFormatKHR, formatCount);
+		vk.GetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, ctx.surface, &formatCount, raw_data(details.formats));
+    }
+
+    present_mode_count: u32;
+	vk.GetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, ctx.surface, &present_mode_count, nil);
+	if present_mode_count > 0
+	{
+		details.present_modes = make([]vk.PresentModeKHR, present_mode_count);
+		vk.GetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, ctx.surface, &present_mode_count, raw_data(details.present_modes));
+	}
+
+
+    return details;
+}
+
+choose_surface_format :: proc(using ctx: ^Context) -> vk.SurfaceFormatKHR
+{
+	for v in swap_chain.support.formats
+	{
+		if v.format == .B8G8R8A8_SRGB && v.colorSpace == .SRGB_NONLINEAR do return v;
+	}
+	
+	return swap_chain.support.formats[0];
+}
+
+choose_present_mode :: proc(using ctx: ^Context) -> vk.PresentModeKHR
+{
+	for v in swap_chain.support.present_modes
+	{
+		if v == .MAILBOX do return v;
+	}
+	
+	return .FIFO;
+}
+
+choose_swap_extent :: proc(using ctx: ^Context) -> vk.Extent2D
+{
+	if (swap_chain.support.capabilities.currentExtent.width != max(u32))
+	{
+		return swap_chain.support.capabilities.currentExtent;
+	}
+	else
+	{
+		width, height := glfw.GetFramebufferSize(window);
+		
+		extent := vk.Extent2D{u32(width), u32(height)};
+		
+		extent.width = clamp(extent.width, swap_chain.support.capabilities.minImageExtent.width, swap_chain.support.capabilities.maxImageExtent.width);
+		extent.height = clamp(extent.height, swap_chain.support.capabilities.minImageExtent.height, swap_chain.support.capabilities.maxImageExtent.height);
+		
+		return extent;
+	}
+}
+
+create_swap_chain :: proc(using ctx: ^Context)
+{
+	using ctx.swap_chain.support;
+	swap_chain.format       = choose_surface_format(ctx);
+	swap_chain.present_mode = choose_present_mode(ctx);
+	swap_chain.extent       = choose_swap_extent(ctx);
+	swap_chain.image_count  = capabilities.minImageCount + 1;
+	
+	if capabilities.maxImageCount > 0 && swap_chain.image_count > capabilities.maxImageCount
+	{
+		swap_chain.image_count = capabilities.maxImageCount;
+	}
+	
+	create_info: vk.SwapchainCreateInfoKHR;
+	create_info.sType = .SWAPCHAIN_CREATE_INFO_KHR;
+	create_info.surface = surface;
+	create_info.imageFormat = swap_chain.format.format;
+	create_info.imageColorSpace = swap_chain.format.colorSpace;
+	create_info.imageExtent = swap_chain.extent;
+	create_info.imageArrayLayers = 1;
+	create_info.imageUsage = {.COLOR_ATTACHMENT};
+
+    indices := findQueueFamilies(ctx, physicalDevice);
+	
+	queue_family_indices := [2]u32{indices.graphicsFamily, indices.presentFamily};
+	
+	if indices.graphicsFamily != indices.presentFamily
+	{
+		create_info.imageSharingMode = .CONCURRENT;
+		create_info.queueFamilyIndexCount = 2;
+		create_info.pQueueFamilyIndices = &queue_family_indices[0];
+	}
+	else
+	{
+		create_info.imageSharingMode = .EXCLUSIVE;
+		create_info.queueFamilyIndexCount = 0;
+		create_info.pQueueFamilyIndices = nil;
+	}
+	
+	create_info.preTransform = capabilities.currentTransform;
+	create_info.compositeAlpha = {.OPAQUE};
+	create_info.presentMode = swap_chain.present_mode;
+	create_info.clipped = true;
+	create_info.oldSwapchain = vk.SwapchainKHR{};
+	
+	if res := vk.CreateSwapchainKHR(device, &create_info, nil, &swap_chain.handle); res != .SUCCESS
+	{
+		fmt.eprintf("Error: failed to create swap chain!\n");
+		os.exit(1);
+	}
+	
+	vk.GetSwapchainImagesKHR(device, swap_chain.handle, &swap_chain.image_count, nil);
+	swap_chain.images = make([]vk.Image, swap_chain.image_count);
+	vk.GetSwapchainImagesKHR(device, swap_chain.handle, &swap_chain.image_count, raw_data(swap_chain.images));
 }
