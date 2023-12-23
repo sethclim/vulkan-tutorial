@@ -98,6 +98,8 @@ initVulkan :: proc(using ctx: ^Context)
     pickPhysicalDevice(ctx);
     createLogicalDevice(ctx);
     create_swap_chain(ctx)
+    create_image_views(ctx);
+    createGraphicsPipeline(ctx);
 }
 
 
@@ -205,6 +207,10 @@ mainLoop :: proc(using ctx: ^Context)
 
 cleanup :: proc(using ctx: ^Context) 
 {
+    for view in swap_chain.image_views
+	{
+		vk.DestroyImageView(device, view, nil);
+	}
     vk.DestroySwapchainKHR(device, swap_chain.handle, nil);
     if (enableValidationLayers) {
         DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nil);
@@ -598,4 +604,41 @@ create_swap_chain :: proc(using ctx: ^Context)
 	vk.GetSwapchainImagesKHR(device, swap_chain.handle, &swap_chain.image_count, nil);
 	swap_chain.images = make([]vk.Image, swap_chain.image_count);
 	vk.GetSwapchainImagesKHR(device, swap_chain.handle, &swap_chain.image_count, raw_data(swap_chain.images));
+}
+
+/////////////////// Image Views //////////////////
+create_image_views :: proc(ctx : ^Context) 
+{
+    using ctx.swap_chain;
+	
+	image_views = make([]vk.ImageView, len(images));
+
+	for _, i in images
+	{
+		create_info: vk.ImageViewCreateInfo;
+		create_info.sType = .IMAGE_VIEW_CREATE_INFO;
+		create_info.image = images[i];
+		create_info.viewType = .D2;
+		create_info.format = format.format;
+		create_info.components.r = .IDENTITY;
+		create_info.components.g = .IDENTITY;
+		create_info.components.b = .IDENTITY;
+		create_info.components.a = .IDENTITY;
+		create_info.subresourceRange.aspectMask = {.COLOR};
+		create_info.subresourceRange.baseMipLevel = 0;
+		create_info.subresourceRange.levelCount = 1;
+		create_info.subresourceRange.baseArrayLayer = 0;
+		create_info.subresourceRange.layerCount = 1;
+		
+		if res := vk.CreateImageView(device, &create_info, nil, &image_views[i]); res != .SUCCESS
+		{
+			fmt.eprintf("Error: failed to create image view!");
+			os.exit(1);
+		}
+	}
+}
+
+createGraphicsPipeline :: proc() 
+{
+
 }
