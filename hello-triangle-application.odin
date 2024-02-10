@@ -637,5 +637,40 @@ create_image_views :: proc(ctx: ^Context) {
 }
 
 createGraphicsPipeline :: proc(ctx: ^Context) {
-	N
+	vertShaderCode: []byte = readFile("shaders/shader.vert.spv")
+	fragShaderCode: []byte = readFile("shaders/shader.frag.spv")
+
+	vertShaderModule := createShaderModule(ctx, vertShaderCode)
+	fragShaderModule := createShaderModule(ctx, fragShaderCode)
+}
+
+readFile :: proc(filename: string) -> []byte {
+	data, ok := os.read_entire_file_from_filename(filename)
+
+	if !ok {
+		fmt.eprintf("Error: failed to read file!\n")
+		os.exit(1)
+	}
+
+	defer delete(data)
+
+	return data
+}
+
+createShaderModule :: proc(ctx: ^Context, code: []u8) -> vk.ShaderModule {
+
+	createInfo: vk.ShaderModuleCreateInfo = {
+		sType    = .SHADER_MODULE_CREATE_INFO,
+		codeSize = len(code),
+		pCode    = cast(^u32)raw_data(code),
+	}
+
+	shaderModule: vk.ShaderModule
+
+	if vk.CreateShaderModule(ctx.device, &createInfo, nil, &shaderModule) != .SUCCESS {
+		fmt.eprintf("Error: failed to create shader module!\n")
+		os.exit(1)
+	}
+
+	return shaderModule
 }
