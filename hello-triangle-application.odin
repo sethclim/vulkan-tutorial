@@ -20,6 +20,7 @@ Context :: struct {
 	debugMessenger:         vk.DebugUtilsMessengerEXT,
 	enableValidationLayers: bool,
 	surface:                vk.SurfaceKHR,
+	pipeline_layout:        vk.PipelineLayout,
 }
 
 QueueFamilyIndices :: struct {
@@ -191,6 +192,7 @@ mainLoop :: proc(using ctx: ^Context) {
 }
 
 cleanup :: proc(using ctx: ^Context) {
+	vk.DestroyPipelineLayout(ctx.device, ctx.pipeline_layout, nil)
 	for view in swap_chain.image_views {
 		vk.DestroyImageView(device, view, nil)
 	}
@@ -642,6 +644,126 @@ createGraphicsPipeline :: proc(ctx: ^Context) {
 
 	vertShaderModule := createShaderModule(ctx, vertShaderCode)
 	fragShaderModule := createShaderModule(ctx, fragShaderCode)
+
+	vertShaderStageInfo: vk.PipelineShaderStageCreateInfo
+	vertShaderStageInfo.sType = .PIPELINE_SHADER_STAGE_CREATE_INFO
+	vertShaderStageInfo.stage = {.VERTEX}
+	vertShaderStageInfo.module = vertShaderModule
+	vertShaderStageInfo.pName = "main"
+
+	fragShaderStageInfo: vk.PipelineShaderStageCreateInfo
+	fragShaderStageInfo.sType = .PIPELINE_SHADER_STAGE_CREATE_INFO
+	fragShaderStageInfo.stage = {.FRAGMENT}
+	fragShaderStageInfo.module = fragShaderModule
+	fragShaderStageInfo.pName = "main"
+
+	shader_stages := [?]vk.PipelineShaderStageCreateInfo{vertShaderStageInfo, fragShaderStageInfo}
+
+	dynamic_states := [?]vk.DynamicState{.VIEWPORT, .SCISSOR}
+
+	dynamicState: vk.PipelineDynamicStateCreateInfo
+	dynamicState.sType = .PIPELINE_DYNAMIC_STATE_CREATE_INFO
+	dynamicState.dynamicStateCount = len(dynamic_states)
+	dynamicState.pDynamicStates = &dynamic_states[0]
+
+	vertexInputInfo: vk.PipelineVertexInputStateCreateInfo
+	vertexInputInfo.sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
+	vertexInputInfo.vertexBindingDescriptionCount = 0
+	vertexInputInfo.pVertexBindingDescriptions = nil // Optional
+	vertexInputInfo.vertexAttributeDescriptionCount = 0
+	vertexInputInfo.pVertexAttributeDescriptions = nil // Optional
+
+	inputAssembly: vk.PipelineInputAssemblyStateCreateInfo
+	inputAssembly.sType = .PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO
+	inputAssembly.topology = .TRIANGLE_LIST
+	inputAssembly.primitiveRestartEnable = false
+
+	viewport: vk.Viewport
+	viewport.x = 0.0
+	viewport.y = 0.0
+	viewport.width = cast(f32)ctx.swap_chain.extent.width
+	viewport.height = cast(f32)ctx.swap_chain.extent.height
+	viewport.minDepth = 0.0
+	viewport.maxDepth = 1.0
+
+	scissor: vk.Rect2D
+	scissor.offset = {0, 0}
+	scissor.extent = ctx.swap_chain.extent
+
+	viewportState: vk.PipelineViewportStateCreateInfo
+	viewportState.sType = .PIPELINE_VIEWPORT_STATE_CREATE_INFO
+	viewportState.viewportCount = 1
+	viewportState.pViewports = &viewport
+	viewportState.scissorCount = 1
+	viewportState.pScissors = &scissor
+
+	rasterizer: vk.PipelineRasterizationStateCreateInfo
+	rasterizer.sType = .PIPELINE_RASTERIZATION_STATE_CREATE_INFO
+	rasterizer.depthClampEnable = false
+	rasterizer.rasterizerDiscardEnable = false
+	rasterizer.polygonMode = .FILL
+	rasterizer.lineWidth = 1.0
+	rasterizer.cullMode = {.BACK}
+	rasterizer.frontFace = .CLOCKWISE
+	rasterizer.depthBiasEnable = false
+	rasterizer.depthBiasConstantFactor = 0.0 // Optional
+	rasterizer.depthBiasClamp = 0.0 // Optional
+	rasterizer.depthBiasSlopeFactor = 0.0 // Optional
+
+	multisampling: vk.PipelineMultisampleStateCreateInfo
+	multisampling.sType = .PIPELINE_MULTISAMPLE_STATE_CREATE_INFO
+	multisampling.sampleShadingEnable = false
+	multisampling.rasterizationSamples = {._1}
+	multisampling.minSampleShading = 1.0 // Optional
+	multisampling.pSampleMask = nil // Optional
+	multisampling.alphaToCoverageEnable = false // Optional
+	multisampling.alphaToOneEnable = false // Optional
+
+	colorBlendAttachment: vk.PipelineColorBlendAttachmentState
+	colorBlendAttachment.colorWriteMask = {.R, .G, .B, .A}
+	colorBlendAttachment.blendEnable = false
+	colorBlendAttachment.srcColorBlendFactor = .ONE // Optional
+	colorBlendAttachment.dstColorBlendFactor = .ZERO // Optional
+	colorBlendAttachment.colorBlendOp = .ADD // Optional
+	colorBlendAttachment.srcAlphaBlendFactor = .ONE // Optional
+	colorBlendAttachment.dstAlphaBlendFactor = .ZERO // Optional
+	colorBlendAttachment.alphaBlendOp = .ADD // Optional
+
+	colorBlendAttachment.blendEnable = true
+	colorBlendAttachment.srcColorBlendFactor = .SRC_ALPHA
+	colorBlendAttachment.dstColorBlendFactor = .ONE_MINUS_SRC_ALPHA
+	colorBlendAttachment.colorBlendOp = .ADD
+	colorBlendAttachment.srcAlphaBlendFactor = .ONE
+	colorBlendAttachment.dstAlphaBlendFactor = .ZERO
+	colorBlendAttachment.alphaBlendOp = .ADD
+
+	colorBlending: vk.PipelineColorBlendStateCreateInfo
+	colorBlending.sType = .PIPELINE_COLOR_BLEND_STATE_CREATE_INFO
+	colorBlending.logicOpEnable = false
+	colorBlending.logicOp = .COPY // Optional
+	colorBlending.attachmentCount = 1
+	colorBlending.pAttachments = &colorBlendAttachment
+	colorBlending.blendConstants[0] = 0.0 // Optional
+	colorBlending.blendConstants[1] = 0.0 // Optional
+	colorBlending.blendConstants[2] = 0.0 // Optional
+	colorBlending.blendConstants[3] = 0.0 // Optional
+
+	pipelineLayoutInfo: vk.PipelineLayoutCreateInfo
+	pipelineLayoutInfo.sType = .PIPELINE_LAYOUT_CREATE_INFO
+	pipelineLayoutInfo.setLayoutCount = 0 // Optional
+	pipelineLayoutInfo.pSetLayouts = nil // Optional
+	pipelineLayoutInfo.pushConstantRangeCount = 0 // Optional
+	pipelineLayoutInfo.pPushConstantRanges = nil // Optional
+
+	if res := vk.CreatePipelineLayout(ctx.device, &pipelineLayoutInfo, nil, &ctx.pipeline_layout);
+	   res != .SUCCESS {
+		fmt.eprintf("Error: Failed to create pipeline layout!\n")
+		os.exit(1)
+	}
+
+
+	vk.DestroyShaderModule(ctx.device, fragShaderModule, nil)
+	vk.DestroyShaderModule(ctx.device, vertShaderModule, nil)
 }
 
 readFile :: proc(filename: string) -> []byte {
