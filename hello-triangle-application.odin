@@ -6,6 +6,7 @@ import "core:os"
 import "vendor:glfw"
 import vk "vendor:vulkan"
 
+
 WIDTH: i32 = 800
 HEIGHT: i32 = 600
 
@@ -20,7 +21,9 @@ Context :: struct {
 	debugMessenger:         vk.DebugUtilsMessengerEXT,
 	enableValidationLayers: bool,
 	surface:                vk.SurfaceKHR,
+	render_pass:            vk.RenderPass,
 	pipeline_layout:        vk.PipelineLayout,
+	graphicsPipeline:       vk.Pipeline,
 }
 
 QueueFamilyIndices :: struct {
@@ -94,6 +97,7 @@ initVulkan :: proc(using ctx: ^Context) {
 	createLogicalDevice(ctx)
 	create_swap_chain(ctx)
 	create_image_views(ctx)
+	createRenderPass(ctx)
 	createGraphicsPipeline(ctx)
 }
 
@@ -192,7 +196,9 @@ mainLoop :: proc(using ctx: ^Context) {
 }
 
 cleanup :: proc(using ctx: ^Context) {
+	vk.DestroyPipeline(ctx.device, graphicsPipeline, nil)
 	vk.DestroyPipelineLayout(ctx.device, ctx.pipeline_layout, nil)
+	vk.DestroyRenderPass(ctx.device, ctx.render_pass, nil)
 	for view in swap_chain.image_views {
 		vk.DestroyImageView(device, view, nil)
 	}
@@ -317,7 +323,7 @@ debugCallback :: proc(
 	pCallbackData: vk.DebugUtilsMessengerCallbackDataEXT,
 	pUserData: rawptr,
 ) -> b32 {
-	fmt.eprintf("validation layer:  %q ", pCallbackData.pMessage)
+	fmt.eprintln("VULKAN ERROR!!!! :  %q ", pCallbackData.pMessage)
 	// was vk.False
 	return false
 }
@@ -761,6 +767,29 @@ createGraphicsPipeline :: proc(ctx: ^Context) {
 		os.exit(1)
 	}
 
+	pipelineInfo: vk.GraphicsPipelineCreateInfo
+	pipelineInfo.sType = .GRAPHICS_PIPELINE_CREATE_INFO
+	pipelineInfo.stageCount = 2
+	pipelineInfo.pStages = &shader_stages[0]
+	pipelineInfo.pVertexInputState = &vertexInputInfo
+	pipelineInfo.pInputAssemblyState = &inputAssembly
+	pipelineInfo.pViewportState = &viewportState
+	pipelineInfo.pRasterizationState = &rasterizer
+	pipelineInfo.pMultisampleState = &multisampling
+	pipelineInfo.pDepthStencilState = nil // Optional
+	pipelineInfo.pColorBlendState = &colorBlending
+	pipelineInfo.pDynamicState = &dynamicState
+	pipelineInfo.layout = ctx.pipeline_layout
+	pipelineInfo.renderPass = ctx.render_pass
+	pipelineInfo.subpass = 0
+	pipelineInfo.basePipelineHandle = vk.Pipeline{} // Optional
+	pipelineInfo.basePipelineIndex = -1 // Optional
+
+	res := vk.CreateGraphicsPipelines(ctx.device, 0, 1, &pipelineInfo, nil, &ctx.graphicsPipeline)
+	if res != .SUCCESS {
+		fmt.eprintf("Error: Failed to create graphics pipeline! %s \n", res)
+		os.exit(1)
+	}
 
 	vk.DestroyShaderModule(ctx.device, fragShaderModule, nil)
 	vk.DestroyShaderModule(ctx.device, vertShaderModule, nil)
@@ -781,18 +810,52 @@ readFile :: proc(filename: string) -> []byte {
 
 createShaderModule :: proc(ctx: ^Context, code: []u8) -> vk.ShaderModule {
 
-	createInfo: vk.ShaderModuleCreateInfo = {
-		sType    = .SHADER_MODULE_CREATE_INFO,
-		codeSize = len(code),
-		pCode    = cast(^u32)raw_data(code),
-	}
+	createInfo: vk.ShaderModuleCreateInfo
+	createInfo.sType = .SHADER_MODULE_CREATE_INFO
+	createInfo.codeSize = len(code)
+	createInfo.pCode = cast(^u32)raw_data(code)
+
 
 	shaderModule: vk.ShaderModule
-
 	if vk.CreateShaderModule(ctx.device, &createInfo, nil, &shaderModule) != .SUCCESS {
 		fmt.eprintf("Error: failed to create shader module!\n")
 		os.exit(1)
 	}
 
 	return shaderModule
+}
+
+
+createRenderPass :: proc(ctx: ^Context) {
+	colorAttachment: vk.AttachmentDescription
+	colorAttachment.format = ctx.swap_chain.format.format
+	colorAttachment.samples = {._1}
+	colorAttachment.loadOp = .CLEAR
+	colorAttachment.storeOp = .STORE
+	colorAttachment.stencilLoadOp = .DONT_CARE
+	colorAttachment.stencilStoreOp = .DONT_CARE
+	colorAttachment.initialLayout = .UNDEFINED
+	colorAttachment.finalLayout = .PRESENT_SRC_KHR
+
+	colorAttachmentRef: vk.AttachmentReference
+	colorAttachmentRef.attachment = 0
+	colorAttachmentRef.layout = .COLOR_ATTACHMENT_OPTIMAL
+
+	subpass: vk.SubpassDescription
+	subpass.pipelineBindPoint = .GRAPHICS
+	subpass.colorAttachmentCount = 1
+	subpass.pColorAttachments = &colorAttachmentRef
+
+	renderPassInfo: vk.RenderPassCreateInfo
+	renderPassInfo.sType = .RENDER_PASS_CREATE_INFO
+	renderPassInfo.attachmentCount = 1
+	renderPassInfo.pAttachments = &colorAttachment
+	renderPassInfo.subpassCount = 1
+	renderPassInfo.pSubpasses = &subpass
+
+	if res := vk.CreateRenderPass(ctx.device, &renderPassInfo, nil, &ctx.render_pass);
+	   res != .SUCCESS {
+		fmt.eprintf("Error: Failed to create render pass!\n")
+		os.exit(1)
+	}
 }
